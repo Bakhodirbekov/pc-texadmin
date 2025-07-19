@@ -340,42 +340,40 @@ class PDFReportGenerator:
     def __init__(self, db: Session):
         self.db = db
         self.styles = getSampleStyleSheet()
+        self.styles.add(ParagraphStyle(name='TableText', fontSize=7, leading=9))
+        self.styles.add(ParagraphStyle(name='TableBold', fontSize=8, leading=10, fontName='Helvetica-Bold'))
 
     def generate_weekly_report(self, start_date: datetime, end_date: datetime) -> str:
         """Generatsiya yezhenedelnogo PDF-otcheta"""
         filename = f"weekly_report_{start_date.strftime('%Y%m%d')}_to_{end_date.strftime('%Y%m%d')}.pdf"
         filepath = os.path.join(config.REPORTS_DIR, filename)
 
-        # Sozdaniye PDF-dokumenta
-        doc = SimpleDocTemplate(filepath, pagesize=A4)
+        doc = SimpleDocTemplate(filepath, pagesize=A4, leftMargin=30, rightMargin=30, topMargin=30, bottomMargin=30)
         story = []
 
-        # Zagolovok
         title_style = ParagraphStyle(
             'CustomTitle',
             parent=self.styles['Heading1'],
             fontSize=18,
             spaceAfter=30,
-            alignment=1  # Vyravnivaniye po tsentru
+            alignment=1
         )
-        story.append(Paragraph(f"Yezhenedelnyy otchet ({start_date.strftime('%Y-%m-%d')} po {end_date.strftime('%Y-%m-%d')})",
-                               title_style))
+        story.append(
+            Paragraph(f"Yezhenedelnyy otchet ({start_date.strftime('%Y-%m-%d')} po {end_date.strftime('%Y-%m-%d')})",
+                      title_style))
         story.append(Spacer(1, 20))
 
-        # Polucheniye dannykh o zayavkakh
         requests = self.db.query(Request).filter(
             Request.created_at >= start_date,
-            Request.created_at <= end_date
+            Request.created_at <= end_date + timedelta(days=1, seconds=-1)
         ).all()
 
-        # Obobshchennaya statistika
         total_requests = len(requests)
         completed_requests = sum(1 for r in requests if r.status == 'completed')
         in_progress_requests = sum(1 for r in requests if r.status == 'in_progress')
         pending_requests = sum(1 for r in requests if r.status == 'pending')
         not_completed_requests = sum(1 for r in requests if r.status == 'not_completed')
 
-        # Svobodnaya tablitsa
         summary_data = [
             ['Status', 'Kolichestvo', 'Protsent'],
             ['Vsego zayavok', str(total_requests), '100%'],
@@ -402,53 +400,65 @@ class PDFReportGenerator:
         ]))
 
         story.append(summary_table)
-        story.append(Spacer(100, 30))
+        story.append(Spacer(1, 30))
 
-        # Podrobnaya tablitsa zayavok
         if requests:
             story.append(Paragraph("Podrobnyye zayavki", self.styles['Heading2']))
             story.append(Spacer(1, 12))
 
-            # Preobrazovaniye zayavok v DataFrame dlya oblegcheniya manipulyatsiy
-            df_data = []
+            table_data = [
+                ['ID', 'Polzovatel', 'Region', 'Rayon', 'Uchrezhdeniye', 'Prichina', 'Status', 'Sozdano']
+            ]
+
             for req in requests:
-                df_data.append({
-                    'ID': req.id,
-                    'Polzovatel': req.user.full_name,
-                    'Region': req.region,
-                    'Rayon': req.district,
-                    'Uchrezhdeniye': req.institution,
-                    'Prichina': req.reason[:50] + "..." if len(req.reason) > 50 else req.reason,
-                    'Status': req.status.title(),
-                    'Sozdano': req.created_at.strftime('%Y-%m-%d %H:%M')
-                })
+                reason_text = req.reason
+                if len(reason_text) > 100:  # Cheklov 100 belgidan
+                    reason_text = reason_text[:100] + '...'
 
-            df = pd.DataFrame(df_data)
+                row = [
+                    Paragraph(str(req.id), self.styles['TableText']),
+                    Paragraph(req.user.full_name, self.styles['TableText']),
+                    Paragraph(req.region, self.styles['TableText']),
+                    Paragraph(req.district, self.styles['TableText']),
+                    Paragraph(req.institution, self.styles['TableText']),
+                    Paragraph(reason_text, self.styles['TableText']),
+                    Paragraph(req.status.title(), self.styles['TableText']),
+                    Paragraph(req.created_at.strftime('%Y-%m-%d %H:%M'), self.styles['TableText'])
+                ]
+                table_data.append(row)
 
-            # Sozdaniye dannykh tablitsy
-            table_data = [df.columns.tolist()]
-            for _, row in df.iterrows():
-                table_data.append(row.tolist())
+            # Ustunlarning aniq kengliklari (umumiy 540 punkt)
+            col_widths = [
+                25,  # ID
+                70,  # Polzovatel
+                70,  # Region
+                70,  # Rayon
+                100,  # Uchrezhdeniye
+                100,  # Prichina (qisqartirilgan)
+                50,  # Status
+                75  # Sozdano
+            ]
 
-            # Sozdaniye tablitsy
-            detailed_table = Table(table_data)
+            detailed_table = Table(table_data, colWidths=col_widths)
             detailed_table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
                 ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
                 ('FONTSIZE', (0, 0), (-1, 0), 10),
                 ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
                 ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
                 ('GRID', (0, 0), (-1, -1), 1, colors.black),
-                ('FONTSIZE', (0, 1), (-1, -1), 8)
+                ('ALIGN', (0, 1), (-1, -1), 'LEFT'),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
             ]))
 
             story.append(detailed_table)
 
-        # Postroyeniye PDF
         doc.build(story)
         return filepath
+
+
 
 
 # Initsializatsiya bota
@@ -457,59 +467,101 @@ dp = Dispatcher(storage=MemoryStorage())
 router = Router()
 
 
-# Initsializatsiya primernykh dannykh
 def initialize_sample_data():
     db = SessionLocal()
 
-    # Proverka sushchestvovaniya dannykh
+    # Проверка существования данных, чтобы не добавлять их повторно
     if db.query(Region).first():
         db.close()
         return
 
-    # Sozdaniye primernykh regionov
-    regions = [
-        Region(name="Ташкент"),
-        Region(name="Ташкентская область"),
-        Region(name="Самаркандская область"),
-        Region(name="Бухарская область")
-    ]
+    print("Начинаем заполнение базы данных всеми регионами и районами...")
 
-    for region in regions:
+    # Данные для всех регионов и их районов
+    data = {
+        "Республика Каракалпакстан": ["Амударьинский район", "Берунийский район", "Бозатауский район",
+                                      "Кегейлийский район", "Кунградский район", "Канлыкульский район",
+                                      "Муйнакский район", "Нукусский район", "Тахиаташский район", "Турткульский район",
+                                      "Ходжейлийский район", "Чимбайский район", "Шуманайский район",
+                                      "Элликкалинский район"],
+        "Андижанская область": ["Андижанский район", "Асакинский район", "Алтынкульский район", "Балыкчинский район",
+                                "Бустанский район", "Булакбашинский район", "Джалакудукский район",
+                                "Избасканский район", "Кургантепинский район", "Мархаматский район",
+                                "Пахтаабадский район", "Улугнорский район", "Ходжаабадский район",
+                                "Шахриханский район"],
+        "Бухарская область": ["Алатский район", "Бухарский район", "Вабкентский район", "Гиждуванский район",
+                              "Джандаринский район", "Каганский район", "Каракульский район", "Караулбазарский район",
+                              "Пешкунский район", "Ромитанский район", "Шафирканский район"],
+        "Джизакская область": ["Арнасайский район", "Бахмальский район", "Галляаральский район", "Дустликский район",
+                               "Джизакский район", "Зааминский район", "Зарбдорский район", "Зафарабадский район",
+                               "Мирзачульский район", "Пахтакорский район", "Фаришский район", "Янгиабадский район"],
+        "Кашкадарьинская область": ["Камашинский район", "Каршинский район", "Касбинский район", "Китабский район",
+                                    "Мубарекский район", "Нишанский район", "Гузарский район", "Чиракчинский район",
+                                    "Шахрисабзский район", "Яккабагский район", "Миришкорский район",
+                                    "Кумкурганский район"],
+        "Навоийская область": ["Карманинский район", "Кызылтепинский район", "Навбахорский район", "Канимехский район",
+                               "Нуратинский район", "Тамадинский район", "Учкудукский район", "Хатырчинский район"],
+        "Наманганская область": ["Наманганский район", "Касансайский район", "Мингбулакский район", "Нарынский район",
+                                 "Папский район", "Туракурганский район", "Учкурганский район", "Чартакский район",
+                                 "Чустский район", "Янгикурганский район", "Чортокский район"],
+        "Самаркандская область": ["Акдарьинский район", "Булунгурский район", "Джамбайский район", "Иштиханский район",
+                                  "Каттакурганский район", "Кушрабатский район", "Нарпайский район",
+                                  "Нурабадский район", "Пайарыкский район", "Пастдаргамский район",
+                                  "Пахтачинский район", "Самаркандский район", "Тайлакский район", "Ургутский район"],
+        "Сурхандарьинская область": ["Ангорский район", "Байсунский район", "Бандиханский район", "Денауский район",
+                                     "Джаркурганский район", "Кумкурганский район", "Кызырыкский район",
+                                     "Музрабадский район", "Сариасийский район", "Термезский район", "Узунский район",
+                                     "Шерабадский район", "Шурчинский район"],
+        "Сырдарьинская область": ["Акалтынский район", "Баяутский район", "Гулистанский район", "Мирзаабадский район",
+                                  "Сардобинский район", "Сайхунабадский район", "Сырдарьинский район",
+                                  "Хавастский район"],
+        "Ташкентская область": ["Ахангаранский район", "Бекабадский район", "Букинский район", "Бостанлыкский район",
+                                "Куйичирчикский район", "Зангиатинский район", "Юкоричирчикский район",
+                                "Кибрайский район", "Паркентский район", "Пскентский район", "Ташкентский район",
+                                "Чирчикский район", "Янгиюльский район"],
+        "Ферганская область": ["Алтыарыкский район", "Багдадский район", "Бешарыкский район", "Бувайдинский район",
+                               "Кувинский район", "Риштанский район", "Сохский район", "Ташлакский район",
+                               "Узбекистанский район", "Учкуприкский район", "Ферганский район", "Фуркатский район"],
+        "Хорезмская область": ["Багатский район", "Гурленский район", "Кошкупирский район", "Ургенчский район",
+                               "Хазараспский район", "Хивинский район", "Хонкинский район", "Шаватский район",
+                               "Янгиарыкский район", "Янгибазарский район"],
+        "Город Ташкент": ["Бектемирский район", "Мирабадский район", "Мирзо-Улугбекский район", "Сергелийский район",
+                          "Учтепинский район", "Чиланзарский район", "Шайхантахурский район", "Юнусабадский район",
+                          "Яккасарайский район"]
+    }
+
+    # Создаем регионы и маппинг для их ID
+    regions_map = {}
+    for region_name in data.keys():
+        region = Region(name=region_name)
         db.add(region)
+        regions_map[region_name] = region
     db.commit()
 
-    # Sozdaniye primernykh rayonov
-    districts = [
-        District(name="Мирабадский район", region_id=1),
-        District(name="Юнусабадский район", region_id=1),
-        District(name="Шайхантахурский район", region_id=1),
-        District(name="Чиланзарский район", region_id=1),
-        District(name="Юкоричирчикский район", region_id=2),
-        District(name="Пайарикский район", region_id=3)
-    ]
-
-    for district in districts:
-        db.add(district)
+    # Создаем районы, используя ID регионов
+    for region_name, districts_list in data.items():
+        region_id = regions_map[region_name].id
+        for district_name in districts_list:
+            district = District(name=district_name, region_id=region_id)
+            db.add(district)
     db.commit()
 
-    # Sozdaniye primernykh uchrezhdeniy
+    # Добавляем примеры учреждений
     institutions = [
-        Institution(name="1-я Семейная поликлиника", district_id=1),
-        Institution(name="2-я Семейная поликлиника", district_id=1),
-        Institution(name="Городская больница №1", district_id=2),
-        Institution(name="Городская больница №2", district_id=2),
-        Institution(name="Министерство образования", district_id=3),
-        Institution(name="Университет", district_id=4),
-        Institution(name="Детский сад №5", district_id=5),
-        Institution(name="Школа №10", district_id=6)
+        Institution(name="1-я Семейная поликлиника",
+                    district_id=db.query(District).filter_by(name="Мирабадский район").first().id),
+        Institution(name="2-я Семейная поликлиника",
+                    district_id=db.query(District).filter_by(name="Юнусабадский район").first().id),
+        Institution(name="Городская больница №1",
+                    district_id=db.query(District).filter_by(name="Чиланзарский район").first().id),
+        Institution(name="Детский сад №5",
+                    district_id=db.query(District).filter_by(name="Юкоричирчикский район").first().id),
     ]
-
-    for institution in institutions:
-        db.add(institution)
+    db.add_all(institutions)
     db.commit()
 
     db.close()
-
+    print("База данных успешно заполнена. Вы готовы к работе!")
 
 # Obrabotchiki
 @router.message(Command("start"))
@@ -963,7 +1015,7 @@ async def process_request_confirmation(callback: CallbackQuery, state: FSMContex
             f"ID заявки: #{request.id}\n"
             f"Статус: В ожидании\n\n"
             "Ваша заявка была отправлена администраторам и техникам.",
-            reply_markup=None
+            # reply_markup=True
         )
 
         admins = db.query(User).filter(User.role == 'admin').all()
@@ -1422,17 +1474,29 @@ async def admin_manage_data_handler(message: Message):
     )
 
 
+# Yangi muassasa qo'shish holatlari
+class AdminAddInstitution(StatesGroup):
+    waiting_for_region = State()
+    waiting_for_district = State()
+    waiting_for_name = State()
+
+
 @router.callback_query(F.data == "add_institution")
 async def add_institution_start(callback: CallbackQuery, state: FSMContext):
-    await callback.message.edit_text(
+    # Вместо редактирования, отправляем новое сообщение
+    await callback.message.answer(
         "➕ **Добавление нового учреждения**\n\n"
         "Пожалуйста, выберите регион:",
         reply_markup=create_regions_keyboard()
     )
-    await state.set_state(AdminManageData.add_institution_waiting_for_region)
 
+    # Также не забудьте удалить старое сообщение с инлайн-клавиатурой,
+    # чтобы оно не мешало
+    await callback.message.delete()
 
-@router.message(StateFilter(AdminManageData.add_institution_waiting_for_region), F.text)
+    await state.set_state(AdminAddInstitution.waiting_for_region)
+
+@router.message(StateFilter(AdminAddInstitution.waiting_for_region), F.text)
 async def process_add_institution_region(message: Message, state: FSMContext):
     if message.text == "Отмена":
         await state.clear()
@@ -1456,10 +1520,10 @@ async def process_add_institution_region(message: Message, state: FSMContext):
         "Теперь, пожалуйста, выберите район:",
         reply_markup=create_districts_keyboard(message.text)
     )
-    await state.set_state(AdminManageData.add_institution_waiting_for_district)
+    # <-- ИСПРАВЛЕНО ЗДЕСЬ
+    await state.set_state(AdminAddInstitution.waiting_for_district)
 
-
-@router.message(StateFilter(AdminManageData.add_institution_waiting_for_district), F.text)
+@router.message(StateFilter(AdminAddInstitution.waiting_for_district), F.text)
 async def process_add_institution_district(message: Message, state: FSMContext):
     if message.text == "Отмена":
         await state.clear()
@@ -1490,10 +1554,10 @@ async def process_add_institution_district(message: Message, state: FSMContext):
         "Пожалуйста, введите название нового учреждения:",
         reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Отмена")]], resize_keyboard=True)
     )
-    await state.set_state(AdminManageData.add_institution_waiting_for_name)
+    # <-- ИСПРАВЛЕНО ЗДЕСЬ
+    await state.set_state(AdminAddInstitution.waiting_for_name)
 
-
-@router.message(StateFilter(AdminManageData.add_institution_waiting_for_name), F.text)
+@router.message(StateFilter(AdminAddInstitution.waiting_for_name), F.text)
 async def process_add_institution_name(message: Message, state: FSMContext):
     if message.text == "Отмена":
         await state.clear()
@@ -1504,36 +1568,59 @@ async def process_add_institution_name(message: Message, state: FSMContext):
     district_id = data.get('district_id')
     institution_name = message.text
 
-    db = SessionLocal()
-    new_institution = Institution(name=institution_name, district_id=district_id)
-    db.add(new_institution)
-    db.commit()
+    try:
+        db = SessionLocal()
+        new_institution = Institution(name=institution_name, district_id=district_id)
+        db.add(new_institution)
+        db.commit()
 
-    await message.answer(
-        f"✅ Учреждение **{institution_name}** успешно добавлено!",
-        reply_markup=create_admin_keyboard()
-    )
+        await message.answer(
+            f"✅ Учреждение **{institution_name}** успешно добавлено!",
+            reply_markup=create_admin_keyboard()
+        )
 
-    db.close()
-    await state.clear()
+        db.close()
+        await state.clear()
 
+    except Exception as e:
+        # Если произошла ошибка, выведет её в консоль
+        logging.error(f"Ошибка при добавлении учреждения: {e}")
+        await message.answer(
+            f"❌ Произошла ошибка при добавлении учреждения. Пожалуйста, попробуйте снова.",
+            reply_markup=create_admin_keyboard()
+        )
+        await state.clear()
 
 @router.callback_query(F.data == "delete_institution")
 async def delete_institution_start(callback: CallbackQuery):
     db = SessionLocal()
-    institutions = db.query(Institution).all()
+
+    # ИСПРАВЛЕНО: получаем учреждения вместе с районами, к которым они относятся
+    institutions_with_districts = db.query(Institution, District.name).join(District).all()
     db.close()
 
-    if not institutions:
+    if not institutions_with_districts:
         await callback.message.edit_text("В системе нет зарегистрированных учреждений.", reply_markup=None)
         await callback.answer()
         return
 
     await callback.message.edit_text(
         "❌ **Выберите учреждение для удаления:**",
-        reply_markup=create_delete_institution_keyboard(institutions)
+        reply_markup=create_delete_institution_keyboard(institutions_with_districts)
     )
     await callback.answer()
+
+
+# Изменяем функцию, которая создаёт клавиатуру
+def create_delete_institution_keyboard(institutions: List[tuple]) -> InlineKeyboardMarkup:
+    buttons = []
+    # ИСПРАВЛЕНО: теперь institutions - это список кортежей (Institution, district_name)
+    for institution, district_name in institutions:
+        button_text = f"{district_name}: {institution.name}"
+        buttons.append([InlineKeyboardButton(text=button_text, callback_data=f"delete_inst_{institution.id}")])
+
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_manage_data")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 @router.callback_query(F.data.startswith("delete_inst_"))
