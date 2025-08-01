@@ -36,13 +36,13 @@ from reportlab.lib import colors
 @dataclass
 class Config:
     BOT_TOKEN: str = "7147789967:AAH0GgOzPU_CtX3p_tCu9szc28BUPUqsqI4"
-    ADMIN_IDS: List[int] = None
+    ADMIN_IDS: List[int] = None # Super Admin ID'lari
     DATABASE_URL: str = "sqlite:///requests.db"
     REPORTS_DIR: str = "reports"
 
     def __post_init__(self):
         if self.ADMIN_IDS is None:
-            self.ADMIN_IDS = [584323689]  # Zamenite na realnyy ID administratora
+            self.ADMIN_IDS = [584323689]  # Zamenite na realnyy ID Super administratora
 
         # Sozdaniye papki dlya otchetov, yesli ona ne sushchestvuyet
         os.makedirs(self.REPORTS_DIR, exist_ok=True)
@@ -85,8 +85,13 @@ class Request(Base):
     status = Column(String(20), default='pending')  # pending, in_progress, completed, not_completed
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    # Yangi maydonlar (Qo'shilgan)
+    resolution_details = Column(Text, nullable=True) # Texnikning izohi: nima qilingani, sababi
+    pc_number = Column(String(50), nullable=True) # Kompyuter raqami
+    resolved_by_user_id = Column(Integer, ForeignKey('users.id'), nullable=True) # Kim bajargani
 
     user = relationship("User", back_populates="requests", foreign_keys=[user_id])
+    resolver = relationship("User", foreign_keys=[resolved_by_user_id]) # Yangi relationship
 
 
 class Region(Base):
@@ -143,6 +148,13 @@ class RequestSubmission(StatesGroup):
     waiting_for_submitted_by = State()
     waiting_for_confirmation = State()
 
+# (Qo'shilgan) Arizani hal qilish (texniklar uchun)
+class RequestResolution(StatesGroup):
+    waiting_for_status_confirmation = State()
+    waiting_for_pc_number = State()
+    waiting_for_resolution_details = State()
+    waiting_for_resolution_confirm = State()
+
 
 class TechnicianRegistration(StatesGroup):
     waiting_for_region = State()
@@ -165,6 +177,11 @@ class AdminManageData(StatesGroup):
     add_institution_waiting_for_district = State()
     add_institution_waiting_for_name = State()
     delete_institution_waiting_for_confirmation = State()
+
+# (Qo'shilgan) Super Admin uchun Admin qo'shish
+class SuperAdminAddAdmin(StatesGroup):
+    waiting_for_admin_telegram_id = State()
+    waiting_for_admin_full_name = State()
 
 
 # Vspomogatelnyye funktsii dlya raboty s bazoy dannykh
@@ -273,12 +290,13 @@ def create_technician_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 
+# (O'zgartirilgan) Admin klaviaturasi
 def create_admin_keyboard() -> ReplyKeyboardMarkup:
     buttons = [
-        [KeyboardButton(text="📋 Просмотр заявок"), KeyboardButton(text="👥 Управление пользователями")],
-        [KeyboardButton(text="🏢 Управление данными"), KeyboardButton(text="📊 Отчеты")],
-        [KeyboardButton(text="🔧 Управление техниками")],
-        [KeyboardButton(text="ℹ️ Профиль")]
+        [KeyboardButton(text="📋 Arizalarni ko'rish"), KeyboardButton(text="📊 Hisobotlar")],
+        [KeyboardButton(text="🔧 Texniklarni boshqarish"), KeyboardButton(text="🏢 Ma'lumotlarni boshqarish")],
+        [KeyboardButton(text="👥 Foydalanuvchi & Texniklar soni")], # Yangi tugma
+        [KeyboardButton(text="👑 Admin qo'shish")] # Yangi tugma
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
@@ -326,10 +344,13 @@ def create_admin_manage_data_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def create_delete_institution_keyboard(institutions: List[Institution]) -> InlineKeyboardMarkup:
+# (O'zgartirilgan) Institution o'chirish klaviaturasi
+def create_delete_institution_keyboard(institutions: List[tuple]) -> InlineKeyboardMarkup:
     buttons = []
-    for institution in institutions:
-        buttons.append([InlineKeyboardButton(text=institution.name, callback_data=f"delete_inst_{institution.id}")])
+    # institutions - bu (Institution object, district_name) tuplelar ro'yxati
+    for institution, district_name in institutions:
+        button_text = f"{district_name}: {institution.name}"
+        buttons.append([InlineKeyboardButton(text=button_text, callback_data=f"delete_inst_{institution.id}")])
 
     buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_manage_data")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -359,7 +380,7 @@ class PDFReportGenerator:
             alignment=1
         )
         story.append(
-            Paragraph(f"Yezhenedelnyy otchet ({start_date.strftime('%Y-%m-%d')} po {end_date.strftime('%Y-%m-%d')})",
+            Paragraph(f"Zayafkalar haqida otchod ({start_date.strftime('%Y-%m-%d')} po {end_date.strftime('%Y-%m-%d')})",
                       title_style))
         story.append(Spacer(1, 20))
 
@@ -375,15 +396,15 @@ class PDFReportGenerator:
         not_completed_requests = sum(1 for r in requests if r.status == 'not_completed')
 
         summary_data = [
-            ['Status', 'Kolichestvo', 'Protsent'],
-            ['Vsego zayavok', str(total_requests), '100%'],
-            ['Vypolneno', str(completed_requests),
+            ['Status', 'Soni', 'Foyiz'],
+            ['Zayafkalr soni', str(total_requests), '100%'],
+            ['Bajarilgan ', str(completed_requests),
              f'{completed_requests / total_requests * 100:.1f}%' if total_requests > 0 else '0%'],
-            ['V protsesse', str(in_progress_requests),
+            ['Protsesda', str(in_progress_requests),
              f'{in_progress_requests / total_requests * 100:.1f}%' if total_requests > 0 else '0%'],
-            ['V ozhidanii', str(pending_requests),
+            ['Kutilyadi', str(pending_requests),
              f'{pending_requests / total_requests * 100:.1f}%' if total_requests > 0 else '0%'],
-            ['Ne vypolneno', str(not_completed_requests),
+            ['Bajarilmagan zayafkalar', str(not_completed_requests),
              f'{not_completed_requests / total_requests * 100:.1f}%' if total_requests > 0 else '0%']
         ]
 
@@ -403,17 +424,21 @@ class PDFReportGenerator:
         story.append(Spacer(1, 30))
 
         if requests:
-            story.append(Paragraph("Podrobnyye zayavki", self.styles['Heading2']))
+            story.append(Paragraph("Zayafkalar royxati", self.styles['Heading2']))
             story.append(Spacer(1, 12))
 
             table_data = [
-                ['ID', 'Polzovatel', 'Region', 'Rayon', 'Uchrezhdeniye', 'Prichina', 'Status', 'Sozdano']
+                ['ID', 'Foydalanuvchi', 'Region', 'Rayon', 'Tashkilot', 'Sababi', 'PC', 'Status', 'Sozdano', 'Ish bajarildi'] # Yangi ustun 'PC' va 'Ish bajarildi'
             ]
 
             for req in requests:
                 reason_text = req.reason
-                if len(reason_text) > 100:  # Cheklov 100 belgidan
-                    reason_text = reason_text[:100] + '...'
+                if len(reason_text) > 50: # Cheklovni 50 belgiga tushirdik
+                    reason_text = reason_text[:50] + '...'
+
+                resolution_text = req.resolution_details or "N/A" # Yangi
+                if len(resolution_text) > 50:
+                    resolution_text = resolution_text[:50] + '...'
 
                 row = [
                     Paragraph(str(req.id), self.styles['TableText']),
@@ -422,21 +447,25 @@ class PDFReportGenerator:
                     Paragraph(req.district, self.styles['TableText']),
                     Paragraph(req.institution, self.styles['TableText']),
                     Paragraph(reason_text, self.styles['TableText']),
+                    Paragraph(req.pc_number or 'N/A', self.styles['TableText']), # PC raqami
                     Paragraph(req.status.title(), self.styles['TableText']),
-                    Paragraph(req.created_at.strftime('%Y-%m-%d %H:%M'), self.styles['TableText'])
+                    Paragraph(req.created_at.strftime('%Y-%m-%d %H:%M'), self.styles['TableText']),
+                    Paragraph(resolution_text, self.styles['TableText']), # Ish bajarildi izohi
                 ]
                 table_data.append(row)
 
             # Ustunlarning aniq kengliklari (umumiy 540 punkt)
             col_widths = [
-                25,  # ID
-                70,  # Polzovatel
-                70,  # Region
-                70,  # Rayon
-                100,  # Uchrezhdeniye
-                100,  # Prichina (qisqartirilgan)
-                50,  # Status
-                75  # Sozdano
+                20,  # ID
+                60,  # Polzovatel
+                60,  # Region
+                60,  # Rayon
+                80,  # Uchrezhdeniye
+                70,  # Prichina (qisqartirilgan)
+                30,  # PC
+                40,  # Status
+                70,  # Sozdano
+                50 # Ish bajarildi
             ]
 
             detailed_table = Table(table_data, colWidths=col_widths)
@@ -445,7 +474,7 @@ class PDFReportGenerator:
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
                 ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
                 ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, 0), 10),
+                ('FONTSIZE', (0, 0), (-1, 0), 8), # Kichikroq shrift
                 ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
                 ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
                 ('GRID', (0, 0), (-1, -1), 1, colors.black),
@@ -1015,7 +1044,7 @@ async def process_request_confirmation(callback: CallbackQuery, state: FSMContex
             f"ID заявки: #{request.id}\n"
             f"Статус: В ожидании\n\n"
             "Ваша заявка была отправлена администраторам и техникам.",
-            # reply_markup=True
+            reply_markup=None # Tugmani olib tashlash
         )
 
         admins = db.query(User).filter(User.role == 'admin').all()
@@ -1062,6 +1091,8 @@ async def process_request_confirmation(callback: CallbackQuery, state: FSMContex
         await state.clear()
 
 
+
+
 # Obrabotchiki dlya tekhnikov
 @router.message(F.text == "🔧 Просмотреть заявки")
 async def view_technician_requests_handler(message: Message):
@@ -1097,9 +1128,9 @@ async def view_technician_requests_handler(message: Message):
 
     db.close()
 
-
+# (O'zgartirilgan) Texniklar uchun statusni yangilash handleri (izoh qoldirish uchun)
 @router.callback_query(F.data.startswith("status_"))
-async def update_request_status(callback: CallbackQuery):
+async def initiate_request_status_update(callback: CallbackQuery, state: FSMContext):
     try:
         parts = callback.data.split('_')
         new_status = parts[1]
@@ -1110,16 +1141,132 @@ async def update_request_status(callback: CallbackQuery):
         technician = get_user_by_telegram_id(db, callback.from_user.id)
 
         if not request or request.institution != technician.institution:
-            await callback.answer("❌ У вас нет разрешения изменять статус этой заявки.", show_alert=True)
+            await callback.answer("❌ Sizda bu arizaning statusini o'zgartirishga ruxsat yo'q.", show_alert=True)
             db.close()
             return
 
+        # Agar status "completed" yoki "not_completed" bo'lsa, izoh so'raymiz
+        if new_status in ['completed', 'not_completed']:
+            await state.update_data(
+                request_id=request_id,
+                new_status=new_status,
+                technician_id=technician.id
+            )
+            await callback.message.edit_text(
+                f"Siz arizani **'{new_status.title()}'** statusiga o'tkazmoqchisiz.\n\n"
+                "**Iltimos, PC raqamini kiriting:** (Agar PC bo'lmasa, 'Yo'q' deb yozing)",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="Bekor qilish", callback_data="cancel_resolution")]
+                ])
+            )
+            await state.set_state(RequestResolution.waiting_for_pc_number)
+        else:
+            # Agar status "in_progress" bo'lsa, darhol yangilaymiz
+            request.status = new_status
+            request.resolved_by_user_id = technician.id # Kim bajarganini yozamiz
+            db.commit()
+            db.refresh(request)
+
+            await callback.message.edit_text(
+                f"✅ Ariza #{request_id} statusi **'{new_status.title()}'** ga yangilandi.",
+                reply_markup=None
+            )
+
+            user_who_submitted = db.query(User).get(request.user_id)
+            if user_who_submitted:
+                await bot.send_message(
+                    user_who_submitted.telegram_id,
+                    f"🔔 Arizangiz #{request.id} yangilandi:\n\n"
+                    f"Status: **{new_status.title()}**.\n\n"
+                    f"Sabab: {request.reason}"
+                )
+
+        db.close()
+        await callback.answer() # Callback queryga javob qaytarish
+    except Exception as e:
+        logging.error(f"Arizaning statusini yangilashda xato: {e}")
+        await callback.message.answer(f"Xatolik yuz berdi: {str(e)}")
+
+
+# (Qo'shilgan) Arizani hal qilish (texniklar uchun)
+@router.callback_query(F.data == "cancel_resolution", StateFilter(RequestResolution))
+async def cancel_resolution(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.message.edit_text("Arizani hal qilish bekor qilindi.", reply_markup=None)
+    await callback.answer()
+
+@router.message(StateFilter(RequestResolution.waiting_for_pc_number), F.text)
+async def process_pc_number(message: Message, state: FSMContext):
+    if message.text.lower() == "bekor qilish":
+        await state.clear()
+        await message.answer("Arizani hal qilish bekor qilindi.", reply_markup=create_technician_keyboard())
+        return
+
+    await state.update_data(pc_number=message.text)
+    await message.answer(
+        "**Iltimos, bajarilgan ishlar va muammo sababini batafsil yozing:**\n"
+        "(Misol: 'Printer kartridji almashtirildi, sababi: siyoh tugagan')",
+        reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Bekor qilish")]], resize_keyboard=True)
+    )
+    await state.set_state(RequestResolution.waiting_for_resolution_details)
+
+
+@router.message(StateFilter(RequestResolution.waiting_for_resolution_details), F.text)
+async def process_resolution_details(message: Message, state: FSMContext):
+    if message.text.lower() == "bekor qilish":
+        await state.clear()
+        await message.answer("Arizani hal qilish bekor qilindi.", reply_markup=create_technician_keyboard())
+        return
+
+    await state.update_data(resolution_details=message.text)
+    data = await state.get_data()
+
+    confirmation_text = (
+        f"**Arizani yakunlash tasdiqlash:**\n\n"
+        f"Ariza ID: #{data['request_id']}\n"
+        f"Yangi status: {data['new_status'].title()}\n"
+        f"PC raqami: {data['pc_number']}\n"
+        f"Izoh: {data['resolution_details']}\n\n"
+        "Ma'lumotlar to'g'rimi?"
+    )
+    await message.answer(
+        confirmation_text,
+        reply_markup=create_confirmation_keyboard() # confirm_yes/confirm_no
+    )
+    await state.set_state(RequestResolution.waiting_for_resolution_confirm)
+
+
+@router.callback_query(StateFilter(RequestResolution.waiting_for_resolution_confirm))
+async def confirm_resolution_details(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    request_id = data['request_id']
+    new_status = data['new_status']
+    pc_number = data['pc_number']
+    resolution_details = data['resolution_details']
+    technician_id = data['technician_id']
+
+    db = SessionLocal()
+    request = db.query(Request).get(request_id)
+    technician = db.query(User).get(technician_id) # Texnik ma'lumotlarini olish
+
+    if not request:
+        await callback.message.edit_text("Arizada xatolik topildi, u mavjud emas.", reply_markup=None)
+        await state.clear()
+        db.close()
+        return
+
+    if callback.data == "confirm_yes":
         request.status = new_status
+        request.pc_number = pc_number
+        request.resolution_details = resolution_details
+        request.resolved_by_user_id = technician_id # Kim bajarganini yozamiz
         db.commit()
         db.refresh(request)
 
         await callback.message.edit_text(
-            f"✅ Статус заявки #{request_id} обновлен на: **{new_status.title()}**",
+            f"✅ Ariza #{request_id} statusi **'{new_status.title()}'** ga yangilandi.\n\n"
+            f"PC: {pc_number}\n"
+            f"Izoh: {resolution_details}",
             reply_markup=None
         )
 
@@ -1127,14 +1274,34 @@ async def update_request_status(callback: CallbackQuery):
         if user_who_submitted:
             await bot.send_message(
                 user_who_submitted.telegram_id,
-                f"🔔 Обновление вашей заявки #{request.id}:\n\n"
-                f"Статус был обновлен до: **{new_status.title()}**.\n\n"
-                f"Причина: {request.reason}"
+                f"🔔 Arizangiz #{request.id} yangilandi:\n\n"
+                f"Status: **{new_status.title()}**.\n"
+                f"PC raqami: {pc_number or 'Mavjud emas'}\n"
+                f"Texnik izohi: {resolution_details}\n\n"
+                f"Sabab: {request.reason}"
             )
+        # Adminlarga ham xabar yuborish
+        admins = db.query(User).filter(User.role == 'admin').all()
+        for admin in admins:
+            try:
+                await bot.send_message(
+                    admin.telegram_id,
+                    f"✅ Ariza bajarildi: #{request.id}\n\n"
+                    f"**Kim bajardi:** {technician.full_name if technician else 'Nomalum'}\n"
+                    f"**Status:** {new_status.title()}\n"
+                    f"**Uchrezhdeniye:** {request.institution}\n"
+                    f"**PC raqami:** {pc_number or 'Mavjud emas'}\n"
+                    f"**Sabab:** {request.reason}\n"
+                    f"**Izoh:** {resolution_details}"
+                )
+            except Exception as e:
+                logging.error(f"Administratorga ({admin.telegram_id}) xabar yuborishda xato: {e}")
 
-        db.close()
-    except Exception as e:
-        await callback.message.answer(f"Произошла ошибка: {str(e)}")
+    else:
+        await callback.message.edit_text("❌ Arizani hal qilish bekor qilindi.", reply_markup=None)
+
+    db.close()
+    await state.clear()
 
 
 # Obrabotchiki dlya polzovateley
@@ -1221,7 +1388,7 @@ async def technician_stats_handler(message: Message):
 
 
 # Obrabotchiki dlya administratora
-@router.message(F.text == "📋 Просмотр заявок")
+@router.message(F.text == "📋 Arizalarni ko'rish") # Matn o'zgartirildi
 async def admin_view_requests_handler(message: Message):
     db = SessionLocal()
     user = get_user_by_telegram_id(db, message.from_user.id)
@@ -1251,15 +1418,15 @@ async def admin_view_requests_handler(message: Message):
     db.close()
 
 
-@router.message(F.text == "📊 Отчеты")
+@router.message(F.text == "📊 Hisobotlar") # Matn o'zgartirildi
 async def admin_reports_handler(message: Message):
     await generate_report_handler(message)
 
 
-@router.message(F.text == "🔧 Управление техниками")
+@router.message(F.text == "🔧 Texniklarni boshqarish") # Matn o'zgartirildi
 async def admin_manage_technicians(message: Message):
     await message.answer(
-        "🔧 **Управление техниками**",
+        "🔧 **Texniklarni boshqarish**",
         reply_markup=create_admin_manage_technicians_keyboard()
     )
 
@@ -1271,8 +1438,8 @@ async def admin_add_technician_start(callback: CallbackQuery, state: FSMContext)
         return
 
     await callback.message.edit_text(
-        "🔧 **Добавление нового техника**\n\n"
-        "Пожалуйста, введите Telegram ID нового техника:",
+        "🔧 **Yangi texnik qo'shish**\n\n" # Matn o'zgartirildi
+        "Iltimos, yangi texnikning Telegram ID'sini kiriting:", # Matn o'zgartirildi
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Отмена", callback_data="cancel_add_tech")]])
     )
     await state.set_state(AdminAddTechnician.waiting_for_telegram_id)
@@ -1281,7 +1448,7 @@ async def admin_add_technician_start(callback: CallbackQuery, state: FSMContext)
 @router.callback_query(F.data == "cancel_add_tech")
 async def cancel_add_technician(callback: CallbackQuery, state: FSMContext):
     await state.clear()
-    await callback.message.edit_text("Добавление техника отменено.", reply_markup=None)
+    await callback.message.edit_text("Texnik qo'shish bekor qilindi.", reply_markup=None) # Matn o'zgartirildi
     await callback.answer()
 
 
@@ -1295,22 +1462,22 @@ async def admin_process_technician_id(message: Message, state: FSMContext):
 
         if user:
             await message.answer(
-                f"❌ Этот ID ({telegram_id}) уже зарегистрирован.\n"
-                "Пожалуйста, введите другой ID или отмените действие."
+                f"❌ Bu ID ({telegram_id}) allaqachon ro'yxatdan o'tgan.\n" # Matn o'zgartirildi
+                "Iltimos, boshqa ID kiriting yoki bekor qiling." # Matn o'zgartirildi
             )
             return
 
         await state.update_data(new_tech_telegram_id=telegram_id)
         await message.answer(
-            "ID принят. Теперь, пожалуйста, введите полное имя техника:",
+            "ID qabul qilindi. Endi, iltimos, texnikning to'liq ismini kiriting:", # Matn o'zgartirildi
             reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Отмена")]], resize_keyboard=True)
         )
         await state.set_state(AdminAddTechnician.waiting_for_full_name)
 
     except ValueError:
         await message.answer(
-            "❌ Telegram ID должен состоять только из цифр.\n"
-            "Пожалуйста, попробуйте снова."
+            "❌ Telegram ID faqat raqamlardan iborat bo'lishi kerak.\n" # Matn o'zgartirildi
+            "Iltimos, qaytadan urinib ko'ring." # Matn o'zgartirildi
         )
 
 
@@ -1318,12 +1485,12 @@ async def admin_process_technician_id(message: Message, state: FSMContext):
 async def admin_process_technician_full_name(message: Message, state: FSMContext):
     if message.text == "Отмена":
         await state.clear()
-        await message.answer("Добавление техника отменено.", reply_markup=create_admin_keyboard())
+        await message.answer("Texnik qo'shish bekor qilindi.", reply_markup=create_admin_keyboard()) # Matn o'zgartirildi
         return
 
     await state.update_data(full_name=message.text)
     await message.answer(
-        "Имя принято. Теперь, пожалуйста, выберите регион, в котором будет работать техник:",
+        "Ism qabul qilindi. Endi, iltimos, texnik ishlaydigan mintaqani tanlang:", # Matn o'zgartirildi
         reply_markup=create_regions_keyboard()
     )
     await state.set_state(AdminAddTechnician.waiting_for_region)
@@ -1333,13 +1500,13 @@ async def admin_process_technician_full_name(message: Message, state: FSMContext
 async def admin_process_tech_region(message: Message, state: FSMContext):
     if message.text == "Отмена":
         await state.clear()
-        await message.answer("Добавление техника отменено.", reply_markup=create_admin_keyboard())
+        await message.answer("Texnik qo'shish bekor qilindi.", reply_markup=create_admin_keyboard()) # Matn o'zgartirildi
         return
 
     await state.update_data(region=message.text)
     await message.answer(
-        f"Выбранный регион: {message.text}\n\n"
-        "Выберите район:",
+        f"Tanlangan mintaqa: {message.text}\n\n" # Matn o'zgartirildi
+        "Tumanni tanlang:", # Matn o'zgartirildi
         reply_markup=create_districts_keyboard(message.text)
     )
     await state.set_state(AdminAddTechnician.waiting_for_district)
@@ -1349,13 +1516,13 @@ async def admin_process_tech_region(message: Message, state: FSMContext):
 async def admin_process_tech_district(message: Message, state: FSMContext):
     if message.text == "Отмена":
         await state.clear()
-        await message.answer("Добавление техника отменено.", reply_markup=create_admin_keyboard())
+        await message.answer("Texnik qo'shish bekor qilindi.", reply_markup=create_admin_keyboard()) # Matn o'zgartirildi
         return
 
     await state.update_data(district=message.text)
     await message.answer(
-        f"Выбранный район: {message.text}\n\n"
-        "Выберите учреждение:",
+        f"Tanlangan tuman: {message.text}\n\n" # Matn o'zgartirildi
+        "Muassasani tanlang:", # Matn o'zgartirildi
         reply_markup=create_institutions_keyboard(message.text)
     )
     await state.set_state(AdminAddTechnician.waiting_for_institution)
@@ -1365,7 +1532,7 @@ async def admin_process_tech_district(message: Message, state: FSMContext):
 async def admin_process_tech_institution(message: Message, state: FSMContext):
     if message.text == "Отмена":
         await state.clear()
-        await message.answer("Добавление техника отменено.", reply_markup=create_admin_keyboard())
+        await message.answer("Texnik qo'shish bekor qilindi.", reply_markup=create_admin_keyboard()) # Matn o'zgartirildi
         return
 
     data = await state.get_data()
@@ -1383,33 +1550,33 @@ async def admin_process_tech_institution(message: Message, state: FSMContext):
         district=district,
         institution=institution,
         full_name=full_name,
-        position="Техник",
+        position="Texnik", # Matn o'zgartirildi
         role="technician"
     )
     db.close()
     await state.clear()
 
     await message.answer(
-        "✅ Техник успешно добавлен!\n\n"
-        f"**Имя:** {new_technician.full_name}\n"
+        "✅ Texnik muvaffaqiyatli qo'shildi!\n\n" # Matn o'zgartirildi
+        f"**Ism:** {new_technician.full_name}\n" # Matn o'zgartirildi
         f"**Telegram ID:** {new_technician.telegram_id}\n"
-        f"**Учреждение:** {new_technician.institution}\n"
-        f"**Роль:** Техник\n\n"
-        "Новый техник теперь может начать работу, отправив команду /texstart.",
+        f"**Muassasa:** {new_technician.institution}\n" # Matn o'zgartirildi
+        f"**Roli:** Texnik\n\n" # Matn o'zgartirildi
+        "Yangi texnik endi /texstart buyrug'ini yuborib ish boshlashi mumkin.", # Matn o'zgartirildi
         reply_markup=create_admin_keyboard()
     )
 
     try:
         await bot.send_message(
             new_technician.telegram_id,
-            "🎉 Поздравляем! Вы были добавлены в систему как техник.\n\n"
-            "Пожалуйста, отправьте команду `/texstart` чтобы начать работу."
+            "🎉 Tabriklaymiz! Siz tizimga texnik sifatida qo'shildingiz.\n\n" # Matn o'zgartirildi
+            "Iltimos, ish boshlash uchun `/texstart` buyrug'ini yuboring." # Matn o'zgartirildi
         )
     except Exception as e:
         await message.answer(
-            f"❌ Не удалось отправить сообщение технику. "
-            f"Возможно, он заблокировал бота или еще не запустил его.\n\n"
-            f"Пожалуйста, свяжитесь с ним и попросите запустить бота."
+            f"❌ Texnikka xabar yuborishda xatolik yuz berdi. " # Matn o'zgartirildi
+            f"Ehtimol, u botni bloklagan yoki hali ishga tushirmagan.\n\n" # Matn o'zgartirildi
+            f"Iltimos, u bilan bog'lanib, botni ishga tushirishini so'rang." # Matn o'zgartirildi
         )
 
 
@@ -1420,12 +1587,12 @@ async def admin_delete_technician_start(callback: CallbackQuery):
     db.close()
 
     if not technicians:
-        await callback.message.edit_text("В системе нет зарегистрированных техников.", reply_markup=None)
+        await callback.message.edit_text("Tizimda ro'yxatdan o'tgan texniklar yo'q.", reply_markup=None) # Matn o'zgartirildi
         await callback.answer()
         return
 
     await callback.message.edit_text(
-        "❌ **Выберите техника для удаления:**",
+        "❌ **O'chirish uchun texnikni tanlang:**", # Matn o'zgartirildi
         reply_markup=create_delete_technician_keyboard(technicians)
     )
     await callback.answer()
@@ -1442,34 +1609,63 @@ async def admin_delete_technician(callback: CallbackQuery):
             db.delete(technician)
             db.commit()
             await callback.message.edit_text(
-                f"✅ Техник **{technician.full_name}** был успешно удален.",
+                f"✅ Texnik **{technician.full_name}** muvaffaqiyatli o'chirildi.", # Matn o'zgartirildi
                 reply_markup=None
             )
         else:
-            await callback.message.edit_text("❌ Техник не найден.", reply_markup=None)
+            await callback.message.edit_text("❌ Texnik topilmadi.", reply_markup=None) # Matn o'zgartirildi
 
         db.close()
         await callback.answer()
     except Exception as e:
-        await callback.message.answer(f"Произошла ошибка при удалении: {str(e)}")
+        await callback.message.answer(f"O'chirishda xatolik yuz berdi: {str(e)}") # Matn o'zgartirildi
 
 
 @router.callback_query(F.data == "cancel_delete")
 async def cancel_delete_technician(callback: CallbackQuery):
-    await callback.message.edit_text("Удаление техника отменено.", reply_markup=None)
+    await callback.message.edit_text("Texnikni o'chirish bekor qilindi.", reply_markup=None) # Matn o'zgartirildi
     await callback.answer()
 
 
-@router.message(F.text == "👥 Управление пользователями")
-async def admin_manage_users_handler(message: Message):
-    await message.answer("Эта функция пока не реализована. В будущем здесь появится список пользователей для управления их ролями.")
+# Administrator handlerlari qismida
+@router.message(F.text == "👥 Foydalanuvchi & Texniklar soni")
+async def admin_users_and_techs_count_handler(message: Message):
+    db = SessionLocal()
+    user = get_user_by_telegram_id(db, message.from_user.id)
+    if not user or user.role != 'admin':
+        await message.answer("❌ Sizda bu bo'limga kirishga ruxsat yo'q.")
+        db.close()
+        return
 
+    try: # Qo'shimcha try-except bloki qo'shish
+        total_users = db.query(User).filter(User.role == 'user').count()
+        total_technicians = db.query(User).filter(User.role == 'technician').count()
+        total_active_requests = db.query(Request).filter(Request.status.in_(['pending', 'in_progress'])).count()
+        total_completed_requests = db.query(Request).filter(Request.status == 'completed').count()
+        total_requests_all = db.query(Request).count()
 
-@router.message(F.text == "🏢 Управление данными")
+        stats_text = (
+            "📊 **Tizim statistikasi:**\n\n"
+            f"👥 Umumiy foydalanuvchilar (ariza beruvchilar) soni: **{total_users}**\n"
+            f"🔧 Umumiy texniklar soni: **{total_technicians}**\n\n"
+            f"📋 Umumiy arizalar soni: **{total_requests_all}**\n"
+            f"⏳ Faol (kutayotgan/jarayondagi) arizalar: **{total_active_requests}**\n"
+            f"✅ Bajarilgan arizalar: **{total_completed_requests}**"
+        )
+
+        await message.answer(stats_text)
+    except Exception as e:
+        # Agar xato bo'lsa, uni logga yozamiz va foydalanuvchiga xabar beramiz
+        logging.error(f"Statistika olishda xato yuz berdi: {e}")
+        await message.answer("❌ Statistik ma'lumotlarni olishda xatolik yuz berdi. Iltimos, keyinroq urinib ko'ring.")
+    finally:
+        db.close() # Har doim db ulanishini yopishni unutmang
+
+@router.message(F.text == "🏢 Ma'lumotlarni boshqarish") # Matn o'zgartirildi
 async def admin_manage_data_handler(message: Message):
     await message.answer(
-        "🏢 **Управление данными**\n\n"
-        "Пожалуйста, выберите действие:",
+        "🏢 **Ma'lumotlarni boshqarish**\n\n" # Matn o'zgartirildi
+        "Iltimos, harakatni tanlang:", # Matn o'zgartirildi
         reply_markup=create_admin_manage_data_keyboard()
     )
 
@@ -1485,8 +1681,8 @@ class AdminAddInstitution(StatesGroup):
 async def add_institution_start(callback: CallbackQuery, state: FSMContext):
     # Вместо редактирования, отправляем новое сообщение
     await callback.message.answer(
-        "➕ **Добавление нового учреждения**\n\n"
-        "Пожалуйста, выберите регион:",
+        "➕ **Yangi muassasa qo'shish**\n\n" # Matn o'zgartirildi
+        "Iltimos, mintaqani tanlang:", # Matn o'zgartirildi
         reply_markup=create_regions_keyboard()
     )
 
@@ -1500,7 +1696,7 @@ async def add_institution_start(callback: CallbackQuery, state: FSMContext):
 async def process_add_institution_region(message: Message, state: FSMContext):
     if message.text == "Отмена":
         await state.clear()
-        await message.answer("Действие отменено.", reply_markup=create_admin_keyboard())
+        await message.answer("Harakat bekor qilindi.", reply_markup=create_admin_keyboard()) # Matn o'zgartirildi
         return
 
     db = SessionLocal()
@@ -1509,25 +1705,24 @@ async def process_add_institution_region(message: Message, state: FSMContext):
 
     if not region:
         await message.answer(
-            "❌ Выбранный регион не найден. Пожалуйста, выберите из списка.",
+            "❌ Tanlangan mintaqa topilmadi. Iltimos, ro'yxatdan tanlang.", # Matn o'zgartirildi
             reply_markup=create_regions_keyboard()
         )
         return
 
     await state.update_data(region_id=region.id, region_name=message.text)
     await message.answer(
-        f"Выбранный регион: {message.text}\n\n"
-        "Теперь, пожалуйста, выберите район:",
+        f"Tanlangan mintaqa: {message.text}\n\n" # Matn o'zgartirildi
+        "Endi, iltimos, tumanni tanlang:", # Matn o'zgartirildi
         reply_markup=create_districts_keyboard(message.text)
     )
-    # <-- ИСПРАВЛЕНО ЗДЕСЬ
     await state.set_state(AdminAddInstitution.waiting_for_district)
 
 @router.message(StateFilter(AdminAddInstitution.waiting_for_district), F.text)
 async def process_add_institution_district(message: Message, state: FSMContext):
     if message.text == "Отмена":
         await state.clear()
-        await message.answer("Действие отменено.", reply_markup=create_admin_keyboard())
+        await message.answer("Harakat bekor qilindi.", reply_markup=create_admin_keyboard()) # Matn o'zgartirildi
         return
 
     data = await state.get_data()
@@ -1543,25 +1738,24 @@ async def process_add_institution_district(message: Message, state: FSMContext):
 
     if not district:
         await message.answer(
-            "❌ Выбранный район не найден в этом регионе. Пожалуйста, выберите из списка.",
+            "❌ Tanlangan tuman bu mintaqada topilmadi. Iltimos, ro'yxatdan tanlang.", # Matn o'zgartirildi
             reply_markup=create_districts_keyboard(data.get('region_name'))
         )
         return
 
     await state.update_data(district_id=district.id)
     await message.answer(
-        f"Выбранный район: {district_name}\n\n"
-        "Пожалуйста, введите название нового учреждения:",
+        f"Tanlangan tuman: {district_name}\n\n" # Matn o'zgartirildi
+        "Iltimos, yangi muassasaning nomini kiriting:", # Matn o'zgartirildi
         reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Отмена")]], resize_keyboard=True)
     )
-    # <-- ИСПРАВЛЕНО ЗДЕСЬ
     await state.set_state(AdminAddInstitution.waiting_for_name)
 
 @router.message(StateFilter(AdminAddInstitution.waiting_for_name), F.text)
 async def process_add_institution_name(message: Message, state: FSMContext):
     if message.text == "Отмена":
         await state.clear()
-        await message.answer("Действие отменено.", reply_markup=create_admin_keyboard())
+        await message.answer("Harakat bekor qilindi.", reply_markup=create_admin_keyboard()) # Matn o'zgartirildi
         return
 
     data = await state.get_data()
@@ -1575,7 +1769,7 @@ async def process_add_institution_name(message: Message, state: FSMContext):
         db.commit()
 
         await message.answer(
-            f"✅ Учреждение **{institution_name}** успешно добавлено!",
+            f"✅ Muassasa **{institution_name}** muvaffaqiyatli qo'shildi!", # Matn o'zgartirildi
             reply_markup=create_admin_keyboard()
         )
 
@@ -1584,9 +1778,9 @@ async def process_add_institution_name(message: Message, state: FSMContext):
 
     except Exception as e:
         # Если произошла ошибка, выведет её в консоль
-        logging.error(f"Ошибка при добавлении учреждения: {e}")
+        logging.error(f"Muassasa qo'shishda xatolik: {e}") # Matn o'zgartirildi
         await message.answer(
-            f"❌ Произошла ошибка при добавлении учреждения. Пожалуйста, попробуйте снова.",
+            f"❌ Muassasa qo'shishda xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.", # Matn o'zgartirildi
             reply_markup=create_admin_keyboard()
         )
         await state.clear()
@@ -1600,27 +1794,15 @@ async def delete_institution_start(callback: CallbackQuery):
     db.close()
 
     if not institutions_with_districts:
-        await callback.message.edit_text("В системе нет зарегистрированных учреждений.", reply_markup=None)
+        await callback.message.edit_text("Tizimda ro'yxatdan o'tgan muassasalar yo'q.", reply_markup=None) # Matn o'zgartirildi
         await callback.answer()
         return
 
     await callback.message.edit_text(
-        "❌ **Выберите учреждение для удаления:**",
+        "❌ **O'chirish uchun muassasani tanlang:**", # Matn o'zgartirildi
         reply_markup=create_delete_institution_keyboard(institutions_with_districts)
     )
     await callback.answer()
-
-
-# Изменяем функцию, которая создаёт клавиатуру
-def create_delete_institution_keyboard(institutions: List[tuple]) -> InlineKeyboardMarkup:
-    buttons = []
-    # ИСПРАВЛЕНО: теперь institutions - это список кортежей (Institution, district_name)
-    for institution, district_name in institutions:
-        button_text = f"{district_name}: {institution.name}"
-        buttons.append([InlineKeyboardButton(text=button_text, callback_data=f"delete_inst_{institution.id}")])
-
-    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="back_to_manage_data")])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 @router.callback_query(F.data.startswith("delete_inst_"))
@@ -1634,23 +1816,23 @@ async def delete_institution(callback: CallbackQuery):
             db.delete(institution)
             db.commit()
             await callback.message.edit_text(
-                f"✅ Учреждение **{institution.name}** было успешно удалено.",
+                f"✅ Muassasa **{institution.name}** muvaffaqiyatli o'chirildi.", # Matn o'zgartirildi
                 reply_markup=None
             )
         else:
-            await callback.message.edit_text("❌ Учреждение не найдено.", reply_markup=None)
+            await callback.message.edit_text("❌ Muassasa topilmadi.", reply_markup=None) # Matn o'zgartirildi
 
         db.close()
         await callback.answer()
     except Exception as e:
-        await callback.message.answer(f"Произошла ошибка при удалении: {str(e)}")
+        await callback.message.answer(f"O'chirishda xatolik yuz berdi: {str(e)}") # Matn o'zgartirildi
 
 
 @router.callback_query(F.data == "back_to_manage_data")
 async def back_to_manage_data(callback: CallbackQuery):
     await callback.message.edit_text(
-        "🏢 **Управление данными**\n\n"
-        "Пожалуйста, выберите действие:",
+        "🏢 **Ma'lumotlarni boshqarish**\n\n" # Matn o'zgartirildi
+        "Iltimos, harakatni tanlang:", # Matn o'zgartirildi
         reply_markup=create_admin_manage_data_keyboard()
     )
     await callback.answer()
@@ -1659,10 +1841,105 @@ async def back_to_manage_data(callback: CallbackQuery):
 @router.callback_query(F.data == "back_to_admin_menu")
 async def back_to_admin_menu(callback: CallbackQuery):
     await callback.message.edit_text(
-        "С возвращением, Администратор! 👋",
+        "Qaytishing bilan, Administrator! 👋", # Matn o'zgartirildi
         reply_markup=create_admin_keyboard()
     )
     await callback.answer()
+
+
+# (Qo'shilgan) Super Admin uchun Admin qo'shish
+@router.message(F.text == "👑 Admin qo'shish")
+async def super_admin_add_admin_start(message: Message, state: FSMContext):
+    if message.from_user.id not in config.ADMIN_IDS: # Faqat Super Admin ID'lari
+        await message.answer("❌ Sizda admin qo'shishga ruxsat yo'q.")
+        return
+
+    await message.answer(
+        "👑 **Yangi admin qo'shish**\n\n"
+        "Iltimos, yangi administratorning Telegram ID'sini kiriting:",
+        reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Bekor qilish")]], resize_keyboard=True)
+    )
+    await state.set_state(SuperAdminAddAdmin.waiting_for_admin_telegram_id)
+
+
+@router.message(StateFilter(SuperAdminAddAdmin.waiting_for_admin_telegram_id), F.text)
+async def process_new_admin_telegram_id(message: Message, state: FSMContext):
+    if message.text.lower() == "bekor qilish":
+        await state.clear()
+        await message.answer("Admin qo'shish bekor qilindi.", reply_markup=create_admin_keyboard())
+        return
+
+    try:
+        telegram_id = int(message.text)
+        db = SessionLocal()
+        user = get_user_by_telegram_id(db, telegram_id)
+
+        if user:
+            # Agar foydalanuvchi mavjud bo'lsa, uning rolini o'zgartiramiz
+            if user.role != 'admin':
+                user.role = 'admin'
+                db.commit()
+                await message.answer(
+                    f"✅ Foydalanuvchi **{user.full_name}** ({telegram_id}) muvaffaqiyatli admin roliga o'tkazildi!",
+                    reply_markup=create_admin_keyboard()
+                )
+                try:
+                    await bot.send_message(telegram_id, "🎉 Tabriklaymiz! Sizga administrator roli berildi.")
+                except Exception as e:
+                    logging.error(f"Yanggi adminga ({telegram_id}) xabar yuborishda xato: {e}")
+            else:
+                await message.answer("❌ Bu foydalanuvchi allaqachon administrator.", reply_markup=create_admin_keyboard())
+            await state.clear()
+        else:
+            # Agar foydalanuvchi mavjud bo'lmasa, ma'lumotlarni yig'ib, yangi admin yaratamiz
+            await state.update_data(new_admin_telegram_id=telegram_id)
+            await message.answer(
+                "Foydalanuvchi topilmadi. Iltimos, uning to'liq ismini kiriting:",
+                reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Bekor qilish")]], resize_keyboard=True)
+            )
+            await state.set_state(SuperAdminAddAdmin.waiting_for_admin_full_name)
+        db.close()
+
+    except ValueError:
+        await message.answer(
+            "❌ Telegram ID faqat raqamlardan iborat bo'lishi kerak.\n"
+            "Iltimos, qaytadan kiriting."
+        )
+
+
+@router.message(StateFilter(SuperAdminAddAdmin.waiting_for_admin_full_name), F.text)
+async def process_new_admin_full_name(message: Message, state: FSMContext):
+    if message.text.lower() == "bekor qilish":
+        await state.clear()
+        await message.answer("Admin qo'shish bekor qilindi.", reply_markup=create_admin_keyboard())
+        return
+
+    data = await state.get_data()
+    telegram_id = data.get('new_admin_telegram_id')
+    full_name = message.text
+
+    db = SessionLocal()
+    new_admin = create_user(
+        db=db,
+        telegram_id=telegram_id,
+        region="Admin", # Adminlar uchun o'ziga xos region, district, institution
+        district="Admin",
+        institution="Admin",
+        full_name=full_name,
+        position="Administrator",
+        role="admin"
+    )
+    db.close()
+    await state.clear()
+
+    await message.answer(
+        f"✅ Yangi administrator **{new_admin.full_name}** ({new_admin.telegram_id}) muvaffaqiyatli qo'shildi!",
+        reply_markup=create_admin_keyboard()
+    )
+    try:
+        await bot.send_message(new_admin.telegram_id, "🎉 Tabriklaymiz! Siz tizimga administrator sifatida qo'shildingiz.")
+    except Exception as e:
+        logging.error(f"Yangi adminga ({new_admin.telegram_id}) xabar yuborishda xato: {e}")
 
 
 # Glavnaya funktsiya dlya zapuska bota
