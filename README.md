@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 Основная цель бота
 Ваш бот — это автоматизированная система для подачи и управления заявками от различных учреждений. Он позволяет пользователям отправлять запросы на обслуживание (например, "не работает компьютер"), а администраторам — управлять базой данных учреждений и просматривать эти заявки.
 
@@ -54,3 +55,39 @@ user page
 texpage 
 
 ![photo_2025-07-19_22-54-51](https://github.com/user-attachments/assets/1882c070-a0dd-43db-b905-ee24bfc6f726)
+=======
+# IT Doktor Telegram Boti
+
+Bu loyiha IT muammolarini hal qilish uchun mo'ljallangan Telegram botidir. Foydalanuvchilar o'z muassasalaridagi texnik muammolar bo'yicha arizalar qoldirishlari mumkin, texnik xodimlar va administratorlar esa bu arizalarni boshqarishadi.
+
+---
+
+## ✨ Loyihaning asosiy xususiyatlari
+
+- **Foydalanuvchilar uchun:**
+    - Texnik muammo bo'yicha ariza yuborish.
+    - O'z arizalarining holatini kuzatish.
+    - Profil ma'lumotlarini ko'rish.
+- **Texnik xodimlar uchun:**
+    - O'ziga tegishli hududdan kelgan yangi arizalarni ko'rish.
+    - Arizalar ustida ishlashni boshlash va ularning holatini o'zgartirish.
+    - Arizani bajarilgan deb belgilash.
+- **Administratorlar uchun:**
+    - Barcha hududlardan kelgan arizalarni ko'rish va boshqarish.
+    - Foydalanuvchi va texniklarning ro'yxatini ko'rish.
+    - Tizim statistikalarini (faol arizalar, bajarilgan arizalar, foydalanuvchilar soni) ko'rish.
+
+---
+
+## 🚀 O'rnatish va ishga tushirish
+
+Loyihani o'rnatish va ishga tushirish uchun quyidagi qadamlarni bajaring.
+
+### 1. Loyiha kodini yuklab olish
+
+Loyiha kodini o'zingizning kompyuteringizga klonlab oling:
+
+```bash
+git clone https://github.com/Bakhodirbekov/pc-texadmin
+cd https://github.com/Bakhodirbekov/pc-texadmin
+>>>>>>> 2a09b2fca53e17fd630203a4b14260599e9804e7
