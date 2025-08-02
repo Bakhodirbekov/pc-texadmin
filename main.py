@@ -66,6 +66,7 @@ class User(Base):
     position = Column(String(200), nullable=False)
     role = Column(String(20), default='user')  # user, technician, admin
     is_active = Column(Boolean, default=True)
+    phone_number = Column(String(20), nullable=True)
     created_at = Column(DateTime, default=func.now())
 
     requests = relationship("Request", back_populates="user", foreign_keys="[Request.user_id]")
@@ -162,6 +163,7 @@ class TechnicianRegistration(StatesGroup):
     waiting_for_institution = State()
     waiting_for_full_name = State()
     waiting_for_position = State()
+    waiting_for_phone = State()
 
 
 class AdminAddTechnician(StatesGroup):
@@ -294,9 +296,9 @@ def create_technician_keyboard() -> ReplyKeyboardMarkup:
 def create_admin_keyboard() -> ReplyKeyboardMarkup:
     buttons = [
         [KeyboardButton(text="📋 Arizalarni ko'rish"), KeyboardButton(text="📊 Hisobotlar")],
-        [KeyboardButton(text="🔧 Texniklarni boshqarish"), KeyboardButton(text="🏢 Ma'lumotlarni boshqarish")],
-        [KeyboardButton(text="👥 Foydalanuvchi & Texniklar soni")], # Yangi tugma
-        [KeyboardButton(text="👑 Admin qo'shish")] # Yangi tugma
+        [KeyboardButton(text="🔧 Texniklarni boshqarish"), KeyboardButton(text="🔧 Texniklar haqida ma'lumot")],
+        [KeyboardButton(text="🏢 Ma'lumotlarni boshqarish"), KeyboardButton(text="👥 Foydalanuvchi & Texniklar soni")],
+        [KeyboardButton(text="👑 Admin qo'shish")]
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
@@ -853,40 +855,77 @@ async def process_technician_position(message: Message, state: FSMContext):
         await message.answer("Регистрация отменена.", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="/texstart")]], resize_keyboard=True))
         return
 
-    data = await state.get_data()
+    await state.update_data(position=message.text)
+    await message.answer(
+        "📱 Iltimos, telefon raqamingizni kiriting (namuna: +998901234567):",
+        reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Отмена")]], resize_keyboard=True)
+    )
+    await state.set_state(TechnicianRegistration.waiting_for_phone)
 
+@router.message(StateFilter(TechnicianRegistration.waiting_for_phone), F.text)
+async def process_technician_phone(message: Message, state: FSMContext):
+    if message.text == "Отмена":
+        await state.clear()
+        await message.answer("Регистрация отменена.", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="/texstart")]], resize_keyboard=True))
+        return
+
+    # Telefon raqamini tekshirish
+    phone_number = message.text.strip()
+    if not phone_number.startswith('+') or not phone_number[1:].isdigit():
+        await message.answer("❌ Noto'g'ri telefon raqam formati. Iltimos, +998901234567 formatida kiriting.")
+        return
+
+    data = await state.get_data()
     db = SessionLocal()
     user = create_user(
-        db, message.from_user.id, data['region'], data['district'],
-        data['institution'], data['full_name'], message.text, 'technician'
+        db, message.from_user.id,
+        data['region'], data['district'],
+        data['institution'],
+        data['full_name'],
+        data['position'],
+        'technician'
     )
+    user.phone_number = phone_number  # Telefon raqamini qo'shamiz
+    db.commit()
     db.close()
 
     await state.clear()
     await message.answer(
-        "✅ Регистрация техника завершена!\n\n"
-        f"Регион: {data['region']}\n"
-        f"Район: {data['district']}\n"
-        f"Учреждение: {data['institution']}\n"
-        f"Полное имя: {data['full_name']}\n"
-        f"Должность: {message.text}\n\n"
-        "Добро пожаловать в систему! 🔧",
+        "✅ Texnik ro'yxatdan o'tkazildi!\n\n"
+        f"📱 Telefon: {phone_number}\n\n"
+        "Endi siz texnik sifatida ishlay olasiz!",
         reply_markup=create_technician_keyboard()
     )
 
-    for admin_id in config.ADMIN_IDS:
-        try:
-            await bot.send_message(
-                admin_id,
-                f"🔧 Зарегистрирован новый техник:\n"
-                f"Имя: {data['full_name']}\n"
-                f"Должность: {message.text}\n"
-                f"Регион: {data['region']}\n"
-                f"Район: {data['district']}\n"
-                f"Учреждение: {data['institution']}"
+
+@router.message(F.text == "🔧 Texniklar haqida ma'lumot")
+async def admin_technicians_info(message: Message):
+    db = SessionLocal()
+    user = get_user_by_telegram_id(db, message.from_user.id)
+    if not user or user.role != 'admin':
+        await message.answer("❌ Ruxsat yo'q")
+        db.close()
+        return
+
+    technicians = db.query(User).filter(User.role == 'technician').order_by(User.region, User.district).all()
+
+    if not technicians:
+        await message.answer("❌ Texniklar topilmadi")
+    else:
+        response = "📊 Texniklar haqida ma'lumot:\n\n"
+        for tech in technicians:
+            response += (
+                f"👤 <b>{tech.full_name}</b>\n"
+                f"📱 Tel: {tech.phone_number or 'N/A'}\n"
+                f"🏢 {tech.institution} ({tech.district}, {tech.region})\n"
+                f"🆔 ID: {tech.telegram_id}\n"
+                f"📅 Ro'yxatdan o'tgan: {tech.created_at.strftime('%Y-%m-%d')}\n"
+                f"---\n"
             )
-        except:
-            pass
+        await message.answer(response, parse_mode='HTML')
+
+    db.close()
+
 
 
 # Sostoyaniya otpravki zayavki
@@ -1955,3 +1994,14 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Bot ostanovlen polzovatelem.")
+
+
+
+
+
+
+
+
+
+
+
