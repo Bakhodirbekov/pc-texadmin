@@ -170,6 +170,7 @@ class AdminAddTechnician(StatesGroup):
     waiting_for_telegram_id = State()
     waiting_for_region = State()
     waiting_for_district = State()
+    waiting_for_phone = State()
     waiting_for_institution = State()
     waiting_for_full_name = State()
 
@@ -1078,12 +1079,17 @@ async def process_request_confirmation(callback: CallbackQuery, state: FSMContex
         db.commit()
         db.refresh(request)
 
+
+
+
+
         await callback.message.edit_text(
             "✅ Заявка успешно отправлена!\n\n"
             f"ID заявки: #{request.id}\n"
             f"Статус: В ожидании\n\n"
-            "Ваша заявка была отправлена администраторам и техникам.",
-            reply_markup=None # Tugmani olib tashlash
+            "Ваша заявка была отправлена администраторам и техникам.\n\n"
+            "\nПожалуйста, отправьте команду✅ /start ✅повторно.",
+
         )
 
         admins = db.query(User).filter(User.role == 'admin').all()
@@ -1113,12 +1119,13 @@ async def process_request_confirmation(callback: CallbackQuery, state: FSMContex
             try:
                 await bot.send_message(
                     technician.telegram_id,
-                    f"🔔 Вам поступила новая заявка:\n\n"
-                    f"**ID:** #{request.id}\n"
-                    f"**Uchrezhdeniye:** {request.institution}\n"
-                    f"**Prichina:** {request.reason}\n"
-                    f"**Etazh/Komnata:** {request.floor_room}\n"
-                    f"**Status:** В ожидании\n"
+                    f"🔔 **Вам поступила новая заявка:**\n\n"
+                         f"🆔 **ID:** #{request.id}\n"
+                         f"🏢 **Учреждение:** {request.institution}\n"
+                         f"📝 **Причина:** {request.reason}\n"
+                         f"📍 **Этаж/Комната:** {request.floor_room}\n"
+                         f"➡️ **Статус:** В ожидании\n\n"
+                         "Для возвращения в главное меню нажмите /start"
                 )
             except Exception as e:
                 logging.error(f"Не удалось отправить сообщение технику {technician.telegram_id}: {e}")
@@ -1153,12 +1160,12 @@ async def view_technician_requests_handler(message: Message):
         for req in requests:
             response_text = (
                 f"🔧 **Активная заявка:**\n\n"
-                f"**ID:** #{req.id}\n"
-                f"**Причина:** {req.reason}\n"
-                f"**Этаж/Комната:** {req.floor_room}\n"
-                f"**Статус:** {req.status.title()}\n"
-                f"**Отправил:** {req.submitted_by}\n"
-                f"**Дата:** {req.created_at.strftime('%Y-%m-%d %H:%M')}\n"
+                f"🆔 **ID:** #{req.id}\n"
+                f"📝 **Причина:** {req.reason}\n"
+                f"📍 **Этаж/Комната:** {req.floor_room}\n"
+                f"➡️ **Статус:** {req.status.title()}\n"
+                f"👤 **Отправил:** {req.submitted_by}\n"
+                f"🗓️ **Дата:** {req.created_at.strftime('%Y-%m-%d %H:%M')}\n"
             )
             await message.answer(
                 response_text,
@@ -1192,8 +1199,9 @@ async def initiate_request_status_update(callback: CallbackQuery, state: FSMCont
                 technician_id=technician.id
             )
             await callback.message.edit_text(
-                f"Siz arizani **'{new_status.title()}'** statusiga o'tkazmoqchisiz.\n\n"
-                "**Iltimos, PC raqamini kiriting:** (Agar PC bo'lmasa, 'Yo'q' deb yozing)",
+                f"➡️ **Arizaning yangi holati:** **'{new_status.title()}'**\n\n"
+                     f"💻 **Iltimos, PC raqamini kiriting:**\n"
+                     f"(Agar PC bo'lmasa, **'Yo'q'** deb yozing)",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="Bekor qilish", callback_data="cancel_resolution")]
                 ])
@@ -1207,7 +1215,7 @@ async def initiate_request_status_update(callback: CallbackQuery, state: FSMCont
             db.refresh(request)
 
             await callback.message.edit_text(
-                f"✅ Ariza #{request_id} statusi **'{new_status.title()}'** ga yangilandi.",
+                f"✅ **Статус заявки #{request_id} обновлен на '{new_status.title()}'**"                "Пожалуйста, нажмите кнопку ниже или отправьте команду✅  /start ✅ повторно.",
                 reply_markup=None
             )
 
@@ -1243,8 +1251,8 @@ async def process_pc_number(message: Message, state: FSMContext):
 
     await state.update_data(pc_number=message.text)
     await message.answer(
-        "**Iltimos, bajarilgan ishlar va muammo sababini batafsil yozing:**\n"
-        "(Misol: 'Printer kartridji almashtirildi, sababi: siyoh tugagan')",
+        f"📝 **Напишите, что было сделано, и укажите причину проблемы:**\n"
+             f"*(Например: '💻 Компьютер был очищен, так как работал медленно.' или '🖨️ Заменили картридж в принтере, так как закончились чернила.')*",
         reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Bekor qilish")]], resize_keyboard=True)
     )
     await state.set_state(RequestResolution.waiting_for_resolution_details)
@@ -1261,12 +1269,12 @@ async def process_resolution_details(message: Message, state: FSMContext):
     data = await state.get_data()
 
     confirmation_text = (
-        f"**Arizani yakunlash tasdiqlash:**\n\n"
-        f"Ariza ID: #{data['request_id']}\n"
-        f"Yangi status: {data['new_status'].title()}\n"
-        f"PC raqami: {data['pc_number']}\n"
-        f"Izoh: {data['resolution_details']}\n\n"
-        "Ma'lumotlar to'g'rimi?"
+        f"✅ **Arizani yakunlash tasdigʻi:**\n\n"
+        f"🆔 **Ariza ID:** #{data['request_id']}\n"
+        f"➡️ **Yangi holati:** {data['new_status'].title()}\n"
+        f"💻 **Kompyuter raqami:** {data['pc_number']}\n"
+        f"📝 **Izoh:** {data['resolution_details']}\n\n"
+        "**Maʼlumotlar toʻgʻrimi?**"
     )
     await message.answer(
         confirmation_text,
@@ -1303,9 +1311,10 @@ async def confirm_resolution_details(callback: CallbackQuery, state: FSMContext)
         db.refresh(request)
 
         await callback.message.edit_text(
-            f"✅ Ariza #{request_id} statusi **'{new_status.title()}'** ga yangilandi.\n\n"
-            f"PC: {pc_number}\n"
-            f"Izoh: {resolution_details}",
+            f"✅ **Статус заявки #{request_id} обновлен на '{new_status.title()}'**\n\n"
+                 f"💻 **Номер ПК:** {pc_number}\n"
+                 f"📝 **Описание:** {resolution_details}\n\n"
+                 f"➡️ Чтобы вернуться в главное меню, нажмите /start.",
             reply_markup=None
         )
 
@@ -1361,11 +1370,11 @@ async def my_requests_handler(message: Message):
         response_text = "📋 Ваши последние 10 заявок:\n\n"
         for req in requests:
             response_text += (
-                f"**ID:** #{req.id}\n"
-                f"**Причина:** {req.reason}\n"
-                f"**Статус:** {req.status.title()}\n"
-                f"**Дата:** {req.created_at.strftime('%Y-%m-%d %H:%M')}\n"
-                f"---\n"
+                f"🆔 **ID:** #{req.id}\n"
+                f"📝 **Причина:** {req.reason}\n"
+                f"➡️ **Статус:** {req.status.title()}\n"
+                f"🗓️ **Дата:** {req.created_at.strftime('%Y-%m-%d %H:%M')}\n"
+                f"---"
             )
         await message.answer(response_text)
 
@@ -1382,14 +1391,14 @@ async def profile_handler(message: Message):
         return
 
     profile_text = (
-        "ℹ️ **Ваш профиль**\n\n"
-        f"**Полное имя:** {user.full_name}\n"
-        f"**Должность:** {user.position}\n"
-        f"**Роль:** {user.role.title()}\n"
-        f"**Регион:** {user.region}\n"
-        f"**Район:** {user.district}\n"
-        f"**Учреждение:** {user.institution}\n"
-        f"**Зарегистрирован:** {user.created_at.strftime('%Y-%m-%d')}"
+        f"ℹ️ **Ваш профиль**\n\n"
+        f"👤 **Полное имя:** {user.full_name}\n"
+        f"💼 **Должность:** {user.position}\n"
+        f"🔑 **Роль:** {user.role.title()}\n"
+        f"🌍 **Регион:** {user.region}\n"
+        f"🏘️ **Район:** {user.district}\n"
+        f"🏢 **Учреждение:** {user.institution}\n"
+        f"🗓️ **Зарегистрирован:** {user.created_at.strftime('%Y-%m-%d')}"
     )
     await message.answer(profile_text)
 
@@ -1417,9 +1426,9 @@ async def technician_stats_handler(message: Message):
 
     stats_text = (
         "📊 **Статистика по вашему учреждению**\n\n"
-        f"**Всего заявок:** {total_requests_in_institution}\n"
-        f"**Выполнено:** {completed}\n"
-        f"**В процессе:** {in_progress}\n"
+        f"➡️ **Всего заявок:** {total_requests_in_institution}\n"
+        f"✅ **Выполнено:** {completed}\n"
+        f"🔄 **В процессе:** {in_progress}\n"
     )
 
     await message.answer(stats_text)
@@ -1446,12 +1455,12 @@ async def admin_view_requests_handler(message: Message):
         response_text = "📋 **Все активные заявки:**\n\n"
         for req in requests:
             response_text += (
-                f"**ID:** #{req.id}\n"
-                f"**Учреждение:** {req.institution}\n"
-                f"**Причина:** {req.reason}\n"
-                f"**Статус:** {req.status.title()}\n"
-                f"**Дата:** {req.created_at.strftime('%Y-%m-%d %H:%M')}\n"
-                f"---\n"
+                f"🆔 **ID:** -- {req.id}\n"
+                f"🏢 **Учреждение:** {req.institution}\n"
+                f"📝 **Причина:** {req.reason}\n"
+                f"➡️ **Статус:** {req.status.title()}\n"
+                f"🗓️ **Дата:** {req.created_at.strftime('%Y-%m-%d %H:%M')}\n"
+                f"---\n\n"
             )
         await message.answer(response_text)
     db.close()
@@ -1524,28 +1533,49 @@ async def admin_process_technician_id(message: Message, state: FSMContext):
 async def admin_process_technician_full_name(message: Message, state: FSMContext):
     if message.text == "Отмена":
         await state.clear()
-        await message.answer("Texnik qo'shish bekor qilindi.", reply_markup=create_admin_keyboard()) # Matn o'zgartirildi
+        await message.answer("Texnik qo'shish bekor qilindi.", reply_markup=create_admin_keyboard())
         return
 
     await state.update_data(full_name=message.text)
     await message.answer(
-        "Ism qabul qilindi. Endi, iltimos, texnik ishlaydigan mintaqani tanlang:", # Matn o'zgartirildi
+        "📱 Iltimos, texnikning telefon raqamini kiriting (namuna: +998901234567):",
+        reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Отмена")]], resize_keyboard=True)
+    )
+    await state.set_state(AdminAddTechnician.waiting_for_phone)
+
+
+@router.message(StateFilter(AdminAddTechnician.waiting_for_phone), F.text)
+async def admin_process_technician_phone(message: Message, state: FSMContext):
+    if message.text == "Отмена":
+        await state.clear()
+        await message.answer("Texnik qo'shish bekor qilindi.", reply_markup=create_admin_keyboard())
+        return
+
+    phone_number = message.text.strip()
+    if not phone_number.startswith('+') or not phone_number[1:].isdigit():
+        await message.answer(
+            "❌ Noto'g'ri telefon raqam formati. Iltimos, +998901234567 formatida kiriting."
+        )
+        return
+
+    await state.update_data(phone_number=phone_number)
+    await message.answer(
+        "Telefon raqami qabul qilindi. Endi, iltimos, texnik ishlaydigan mintaqani tanlang:",
         reply_markup=create_regions_keyboard()
     )
     await state.set_state(AdminAddTechnician.waiting_for_region)
-
 
 @router.message(StateFilter(AdminAddTechnician.waiting_for_region), F.text)
 async def admin_process_tech_region(message: Message, state: FSMContext):
     if message.text == "Отмена":
         await state.clear()
-        await message.answer("Texnik qo'shish bekor qilindi.", reply_markup=create_admin_keyboard()) # Matn o'zgartirildi
+        await message.answer("Texnik qo'shish bekor qilindi.", reply_markup=create_admin_keyboard())
         return
 
     await state.update_data(region=message.text)
     await message.answer(
-        f"Tanlangan mintaqa: {message.text}\n\n" # Matn o'zgartirildi
-        "Tumanni tanlang:", # Matn o'zgartirildi
+        f"Tanlangan mintaqa: {message.text}\n\n"
+        "Tumanni tanlang:",
         reply_markup=create_districts_keyboard(message.text)
     )
     await state.set_state(AdminAddTechnician.waiting_for_district)
@@ -1555,69 +1585,99 @@ async def admin_process_tech_region(message: Message, state: FSMContext):
 async def admin_process_tech_district(message: Message, state: FSMContext):
     if message.text == "Отмена":
         await state.clear()
-        await message.answer("Texnik qo'shish bekor qilindi.", reply_markup=create_admin_keyboard()) # Matn o'zgartirildi
+        await message.answer("Texnik qo'shish bekor qilindi.", reply_markup=create_admin_keyboard())
         return
 
     await state.update_data(district=message.text)
     await message.answer(
-        f"Tanlangan tuman: {message.text}\n\n" # Matn o'zgartirildi
-        "Muassasani tanlang:", # Matn o'zgartirildi
+        f"Tanlangan tuman: {message.text}\n\n"
+        "Muassasani tanlang:",
         reply_markup=create_institutions_keyboard(message.text)
     )
     await state.set_state(AdminAddTechnician.waiting_for_institution)
-
 
 @router.message(StateFilter(AdminAddTechnician.waiting_for_institution), F.text)
 async def admin_process_tech_institution(message: Message, state: FSMContext):
     if message.text == "Отмена":
         await state.clear()
-        await message.answer("Texnik qo'shish bekor qilindi.", reply_markup=create_admin_keyboard()) # Matn o'zgartirildi
+        await message.answer("Texnik qo'shish bekor qilindi.", reply_markup=create_admin_keyboard())
         return
 
     data = await state.get_data()
     telegram_id = data.get('new_tech_telegram_id')
     full_name = data.get('full_name')
+    phone_number = data.get('phone_number')
     region = data.get('region')
     district = data.get('district')
     institution = message.text
 
+    # Muassasa mavjudligini tekshirish
     db = SessionLocal()
-    new_technician = create_user(
-        db=db,
-        telegram_id=telegram_id,
-        region=region,
-        district=district,
-        institution=institution,
-        full_name=full_name,
-        position="Texnik", # Matn o'zgartirildi
-        role="technician"
-    )
-    db.close()
-    await state.clear()
-
-    await message.answer(
-        "✅ Texnik muvaffaqiyatli qo'shildi!\n\n" # Matn o'zgartirildi
-        f"**Ism:** {new_technician.full_name}\n" # Matn o'zgartirildi
-        f"**Telegram ID:** {new_technician.telegram_id}\n"
-        f"**Muassasa:** {new_technician.institution}\n" # Matn o'zgartirildi
-        f"**Roli:** Texnik\n\n" # Matn o'zgartirildi
-        "Yangi texnik endi /texstart buyrug'ini yuborib ish boshlashi mumkin.", # Matn o'zgartirildi
-        reply_markup=create_admin_keyboard()
-    )
-
     try:
-        await bot.send_message(
-            new_technician.telegram_id,
-            "🎉 Tabriklaymiz! Siz tizimga texnik sifatida qo'shildingiz.\n\n" # Matn o'zgartirildi
-            "Iltimos, ish boshlash uchun `/texstart` buyrug'ini yuboring." # Matn o'zgartirildi
+        institution_exists = db.query(Institution).join(District).filter(
+            Institution.name == institution,
+            District.name == district
+        ).first()
+
+        if not institution_exists:
+            await message.answer(
+                f"❌ Muassasa '{institution}' {district} tumanida topilmadi. Iltimos, ro'yxatdan tanlang.",
+                reply_markup=create_institutions_keyboard(district)
+            )
+            db.close()
+            return
+
+        # Yangi texnikni yaratish
+        new_technician = create_user(
+            db=db,
+            telegram_id=telegram_id,
+            region=region,
+            district=district,
+            institution=institution,
+            full_name=full_name,
+            position="Texnik",
+            role="technician"
         )
-    except Exception as e:
+        new_technician.phone_number = phone_number
+        db.commit()
+
+        # Muvaffaqiyatli xabar
         await message.answer(
-            f"❌ Texnikka xabar yuborishda xatolik yuz berdi. " # Matn o'zgartirildi
-            f"Ehtimol, u botni bloklagan yoki hali ishga tushirmagan.\n\n" # Matn o'zgartirildi
-            f"Iltimos, u bilan bog'lanib, botni ishga tushirishini so'rang." # Matn o'zgartirildi
+            "<b>🎉 Texnik muvaffaqiyatli qo'shildi!</b>\n\n"
+            "📋 <b>Ma'lumotlar:</b>\n"
+            f"👤 <b>Ism:</b> {new_technician.full_name}\n"
+            f"📱 <b>Telefon:</b> {phone_number}\n"
+            f"🆔 <b>Telegram ID:</b> {new_technician.telegram_id}\n"
+            f"🏢 <b>Muassasa:</b> {new_technician.institution}\n"
+            f"🔧 <b>Rol:</b> Texnik\n\n"
+            "<i>Yangi texnik endi <code>/texstart</code> buyrug'ini yuborib ish boshlashi mumkin.</i>",
+            parse_mode="HTML",
+            reply_markup=create_admin_keyboard()
         )
 
+        # Yangi texnikka xabar yuborish
+        try:
+            await bot.send_message(
+                new_technician.telegram_id,
+                "🎉 Tabriklaymiz! Siz tizimga texnik sifatida qo'shildingiz.\n\n"
+                "Iltimos, ish boshlash uchun `/texstart` buyrug'ini yuboring."
+            )
+        except Exception as e:
+            await message.answer(
+                f"❌ Texnikka xabar yuborishda xatolik yuz berdi: {str(e)}.\n"
+                f"Ehtimol, u botni bloklagan yoki hali ishga tushirmagan.\n\n"
+                f"Iltimos, u bilan bog'lanib, botni ishga tushirishini so'rang."
+            )
+
+    except Exception as e:
+        logging.error(f"Texnik qo'shishda xatolik: {str(e)}")
+        await message.answer(
+            f"❌ Texnik qo'shishda xatolik yuz berdi: {str(e)}.\nIltimos, qaytadan urinib ko'ring.",
+            reply_markup=create_admin_keyboard()
+        )
+    finally:
+        db.close()
+        await state.clear()
 
 @router.callback_query(F.data == "admin_delete_tech")
 async def admin_delete_technician_start(callback: CallbackQuery):
